@@ -1,8 +1,5 @@
 use flate2::read::GzDecoder;
-use std::{
-	fs::{read, OpenOptions},
-	io::{prelude::*, Result},
-};
+use std::{fs, io::{self, Read}, path::Path};
 
 static salts: [u8; 256] = [
 	65, 197, 33, 222, 107, 28, 149, 55, 78, 17, 175, 6, 176, 135, 221, 233, 72, 122, 193, 213, 68,
@@ -19,7 +16,7 @@ static salts: [u8; 256] = [
 	227, 151, 116, 107, 163, 91, 215, 243, 20, 141, 178, 43, 79, 134, 6, 102, 224, 52, 138, 205,
 	72, 152, 41, 218, 124, 72, 130, 221,
 ];
-static shifts: [u8; 256] = [
+static shifts: [u32; 256] = [
 	1, 1, 0, 2, 2, 4, 5, 0, 4, 7, 1, 6, 5, 3, 3, 1, 2, 5, 0, 6, 2, 2, 4, 2, 2, 3, 0, 2, 1, 2, 4, 3,
 	4, 0, 0, 0, 3, 5, 3, 1, 6, 5, 6, 1, 1, 1, 0, 0, 3, 2, 7, 7, 5, 6, 7, 3, 5, 1, 0, 7, 6, 3, 6, 5,
 	4, 5, 3, 5, 1, 3, 3, 1, 5, 4, 1, 0, 0, 2, 6, 6, 6, 6, 4, 0, 1, 1, 0, 5, 5, 4, 2, 4, 6, 1, 7, 1,
@@ -29,31 +26,31 @@ static shifts: [u8; 256] = [
 	2, 2, 2, 7, 4, 6, 7, 5, 3, 1, 4, 2, 7, 1, 6, 2, 4, 1, 5, 6, 5, 4, 5, 0, 1, 1, 6, 3, 7, 2, 0, 2,
 	5, 0, 1, 3, 3, 2, 6, 7, 7, 2, 5, 6, 0, 4, 1, 2, 5, 3, 7, 6, 5, 2, 5, 2, 0, 1, 3, 1, 4, 3, 4, 2,
 ];
+static encoded_gzip_header: [u8; 2] = [0x2f, 0x27];
 
-fn _decode(mut content: Vec<u8>) -> Vec<u8> {
-	for i in 0..content.len() {
-		let i2 = i % salts.len();
-		content[i] = (content[i] << shifts[i2]) | (content[i] >> (8 - shifts[i2]));
-		content[i] ^= salts[i2];
-	}
-	content
+fn _decode(content: Vec<u8>) -> Vec<u8> {
+	content.iter().enumerate().map(|(mut i, byte)| {
+		i %= shifts.len();
+		(byte << shifts[i] | byte.wrapping_shr(8 - shifts[i])) ^ salts[i]
+	}).collect()
 }
 
-fn decompress_gzip(content: Vec<u8>) -> Result<String> {
+fn decompress_gzip(content: Vec<u8>) -> io::Result<String> {
 	let mut decoder = GzDecoder::new(&content[..]);
 	let mut decoded = String::new();
 	decoder.read_to_string(&mut decoded)?;
 	Ok(decoded)
 }
 
-pub fn decode(path: &std::path::Path) -> Result<()> {
-	let content = read(path)?;
+pub fn decode(path: &Path) -> io::Result<bool> {
+	let content = fs::read(path)?;
 
-	if content.starts_with(&[0x2f, 0x27]) {
-		let mut file = OpenOptions::new().write(true).open(path).unwrap();
-		let decoded = decompress_gzip(_decode(content))?;
-		writeln!(file, "{decoded}")?;
-		println!("Decoded {:?}", path);
+	if !content.starts_with(&encoded_gzip_header) {
+		return Ok(false);
 	}
-	Ok(())
+
+	let decoded = decompress_gzip(_decode(content))?;
+	fs::write(path, decoded)?;
+	println!("Decoded {}", path.to_string_lossy());
+	Ok(true)
 }

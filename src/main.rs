@@ -1,27 +1,34 @@
 #![allow(non_upper_case_globals)]
 
-use std::io::Result;
-use std::fs::read_dir;
-use std::path::Path;
+use std::{env, fs, path::Path, io, process};
 
 mod omctextdecoder;
 
 fn main() {
-	let from = std::env::args().nth(1).unwrap_or(".".into());
-	if let Err(err) = walk_dir(from.as_ref()) {
+	let Some(path) = env::args().nth(1) else {
+		let program = env::current_exe().unwrap();
+		let program = program.file_name().unwrap();
+		println!("Usage: {} <path>", program.to_string_lossy());
+		process::exit(1);
+	};
+
+	let did_decode = decode_dir(path.as_ref()).unwrap_or_else(|err| {
 		eprintln!("{err}");
+		process::exit(1);
+	});
+
+	if !did_decode {
+		println!("No files decoded");
 	}
 }
 
-fn walk_dir(from: &Path) -> Result<()> {
-	for entry in read_dir(from)? {
-		let path = entry?.path();
-
-		if path.is_dir() {
-			walk_dir(&path)?;
-		} else {
-			omctextdecoder::decode(&path)?;
-		}
+fn decode_dir(path: &Path) -> io::Result<bool> {
+	if path.is_dir() {
+		fs::read_dir(path)?
+			.try_fold(false, |prev, entry| {
+				Ok(decode_dir(&entry?.path())? || prev)
+			})
+	} else {
+		omctextdecoder::decode(path)
 	}
-	Ok(())
 }
